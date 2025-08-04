@@ -27,7 +27,7 @@ def get_version(file_path: Path) -> str:
     raise RuntimeError('Unable to find version string.')  # noqa: EM101
 
 
-def load_requirements(*requirements_paths: Path) -> List[str]:  # noqa: C901
+def load_requirements(*requirements_paths: Path) -> list[str]:  # noqa: C901
     """
     Load all requirements from the specified requirements files.
 
