@@ -1,6 +1,10 @@
 import uuid
 import json
 
+import requests
+import jwt
+from jwt.api_jwk import PyJWK
+
 from Cryptodome.PublicKey import RSA
 from jwkest import jwk
 from jwkest.jwk import RSAKey
@@ -199,15 +203,17 @@ class ExternalLtiConfiguration(models.Model):
                     validation_errors.update({field: _(MESSAGES["required"])})
 
         if self.version == LTIVersion.LTI_1P3:
-            if not self.lti_1p3_private_key:
-                # Raise ValidationError if private key is missing.
-                validation_errors.update(
-                    {"lti_1p3_private_key": _(MESSAGES["required"])},
-                )
-            if not self.lti_1p3_tool_public_key and not self.lti_1p3_tool_keyset_url:
-                # Raise ValidationError if public key and keyset URL are missing.
+            # if not self.lti_1p3_private_key:
+            #     # Raise ValidationError if private key is missing.
+            #     validation_errors.update(
+            #         {"lti_1p3_private_key": _(MESSAGES["required"])},
+            #     )
+            # if not self.lti_1p3_tool_public_key and not self.lti_1p3_tool_keyset_url:
+            
+            # AK | Raise ValidationError if keyset URL is missing.
+            if not self.lti_1p3_tool_keyset_url:
                 validation_errors.update({
-                    "lti_1p3_tool_public_key": MESSAGES["required_pubkey_or_keyset"],
+                    # "lti_1p3_tool_public_key": MESSAGES["required_pubkey_or_keyset"],
                     "lti_1p3_tool_keyset_url": MESSAGES["required_pubkey_or_keyset"],
                 })
 
@@ -219,15 +225,35 @@ class ExternalLtiConfiguration(models.Model):
             # Generate client ID or private key ID if missing.
             if not self.lti_1p3_client_id:
                 self.lti_1p3_client_id = str(uuid.uuid4())
-            if not self.lti_1p3_private_key_id:
-                self.lti_1p3_private_key_id = str(uuid.uuid4())
+                
+            # AK | Regenerate public JWK and private key from keyset URL.
+            if self.lti_1p3_tool_keyset_url:
+                response = requests.get(self.lti_1p3_tool_keyset_url)
+                response.raise_for_status()
+                public_keys = response.json()
+                self.lti_1p3_public_jwk = public_keys
+                self.lti_1p3_private_key_id = public_keys['keys'][0]['kid']
 
-            # Regenerate public JWK.
-            public_keys = jwk.KEYS()
-            public_keys.append(RSAKey(
-                kid=self.lti_1p3_private_key_id,
-                key=RSA.import_key(self.lti_1p3_private_key),
-            ))
-            self.lti_1p3_public_jwk = json.loads(public_keys.dump_jwks())
+                # Generate private key
+                algo = jwt.get_algorithm_by_name('RS256')
+                private_key_pem = RSA.generate(2048).export_key('PEM').decode('utf-8')
+                private_key = algo.prepare_key(private_key_pem)
+                private_jwk = json.loads(algo.to_jwk(private_key))
+                private_jwk['kid'] = self.lti_1p3_private_key_id
+                self.lti_1p3_private_key = PyJWK.from_dict(private_jwk)
+                
+            else:
+                if not self.lti_1p3_private_key_id:
+                    self.lti_1p3_private_key_id = str(uuid.uuid4())
+
+                # Regenerate public JWK.
+                public_keys = jwk.KEYS()
+                public_keys.append(RSAKey(
+                    kid=self.lti_1p3_private_key_id,
+                    key=RSA.import_key(self.lti_1p3_private_key),
+                ))
+                self.lti_1p3_public_jwk = json.loads(public_keys.dump_jwks())
+            
+            
 
         super().save(*args, **kwargs)
